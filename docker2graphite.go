@@ -12,6 +12,7 @@ import (
 	"github.com/drags/graphite-golang"
 	"time"
 	"bytes"
+	"flag"
 )
 
 func connect_to_graphite(host string, port int) (*graphite.Graphite) {
@@ -47,7 +48,7 @@ func find_docker_devices(path string) ([]string, error) {
 	return ret, nil
 }
 
-func track_container_dir(graphite_client *graphite.Graphite, dir string) {
+func track_container_dir(graphite_client *graphite.Graphite, dir string, done chan int) {
 	prefix := bytes.NewBufferString("test.d2g.")
 	prefix.WriteString(filepath.Base(dir))
 	now := time.Now().Unix()
@@ -75,10 +76,18 @@ func track_container_dir(graphite_client *graphite.Graphite, dir string) {
 		ret_metrics[i] = graphite.NewMetric(metric_name, metric_value, now)
 	}
 	graphite_client.SendMetrics(ret_metrics)
+	done <- 1
 }
 
 func main() {
-	graphite_client := connect_to_graphite("graphite.example.com", 2003)
+	done := make(chan int)
+	graphite_host := flag.String("H", "", "Graphite carbon-cache host")
+	graphite_port := flag.Int("P", 2003, "Graphite carbon-cache port")
+	flag.Parse()
+	if *graphite_host == "" {
+		log.Fatal("Must provide a graphite carbon-cache host with -H")
+	}
+	graphite_client := connect_to_graphite(*graphite_host, *graphite_port)
 	devices, err := find_docker_devices("/sys/fs/cgroup/memory/docker/*")
 	//devices, err := find_docker_devices("/opt/gutenberg_texts/1*")
 	if err != nil {
@@ -86,9 +95,8 @@ func main() {
 	}
 	for _, path := range devices {
 		if path != "" {
-			go track_container_dir(graphite_client, path)
+			go track_container_dir(graphite_client, path, done)
+			<-done
 		}
 	}
-	var i string
-	fmt.Scanln(&i)
 }
