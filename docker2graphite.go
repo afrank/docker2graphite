@@ -23,8 +23,10 @@ func connect_to_graphite(host string, port int) (*graphite.Graphite) {
 	return graphite_client
 }
 
-func find_docker_devices(path string) ([]string, error) {
-	devices, _ := filepath.Glob(path)
+func find_docker_devices(cgroup_path string) ([]string, error) {
+	search_path := strings.TrimRight(cgroup_path, "*/")
+	search_path = fmt.Sprintf("%s/*", search_path)
+	devices, _ := filepath.Glob(search_path)
 	ret := make([]string, 8)
 	found_dirs := 0
 	for _, path := range devices {
@@ -81,15 +83,15 @@ func track_container_dir(graphite_client *graphite.Graphite, dir string, done ch
 
 func main() {
 	done := make(chan int)
-	graphite_host := flag.String("H", "", "Graphite carbon-cache host")
-	graphite_port := flag.Int("P", 2003, "Graphite carbon-cache port")
+	graphite_host := flag.String("H", "", "Graphite carbon-cache host, REQUIRED")
+	graphite_port := flag.Int("P", 2003, "Graphite carbon-cache plaintext port")
+	cgroup_path := flag.String("c", "/sys/fs/cgroup/memory/docker/", "Path to docker in sysfs/cgroup/")
 	flag.Parse()
 	if *graphite_host == "" {
 		log.Fatal("Must provide a graphite carbon-cache host with -H")
 	}
 	graphite_client := connect_to_graphite(*graphite_host, *graphite_port)
-	devices, err := find_docker_devices("/sys/fs/cgroup/memory/docker/*")
-	//devices, err := find_docker_devices("/opt/gutenberg_texts/1*")
+	devices, err := find_docker_devices(*cgroup_path)
 	if err != nil {
 		log.Fatal("Got err from find_docker_devices:", err)
 	}
