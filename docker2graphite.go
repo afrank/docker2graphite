@@ -35,7 +35,7 @@ func find_containers(sysfs_path string) ([]string, error) {
 	for _, path := range possible_containers {
 		fi, err := os.Stat(path)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("Got err while stat'ing container directory: ", err)
 			continue
 		}
 
@@ -62,7 +62,7 @@ func track_container_dir(graphite_client *graphite.Graphite, dir string, contain
 		stat_file := path.Join(dir, "memory.stat")
 		lines, err := ioutil.ReadFile(stat_file)
 		if err != nil {
-			log.Print("Got error when stat'ing memory.stat: ", err)
+			log.Println("Got error when stat'ing memory.stat: ", err)
 			// Assume container has disappeared, end goroutine
 			container_done <- dir
 			return
@@ -94,7 +94,7 @@ func watch_sysfs_dir(sysfs_path string, graphite_client *graphite.Graphite) {
 	// closure to handle accounting at goroutine start
 	start_container_dir := func(path string) {
 		if path != "" && watched_containers[path] == false {
-			log.Print("Adding new container with path: ", path)
+			log.Println("Adding new container with path: ", path)
 			watched_containers[path] = true
 			go track_container_dir(graphite_client, path, container_done)
 		}
@@ -131,7 +131,7 @@ func watch_sysfs_dir(sysfs_path string, graphite_client *graphite.Graphite) {
 				// If file named in create event is directory, start tracking
 				fi, err := os.Stat(event.Name)
 				if err != nil {
-					fmt.Println(err)
+					fmt.Println("Got error from os.Stat on event.Name: ", err)
 					break
 				}
 				if m := fi.Mode(); m.IsDir() {
@@ -140,7 +140,7 @@ func watch_sysfs_dir(sysfs_path string, graphite_client *graphite.Graphite) {
 			}
 		// Handle done signals from track_container_dir
 		case done_container := <-container_done:
-			log.Print("Removing finished container with path: ", done_container)
+			log.Println("Removing finished container with path: ", done_container)
 			watched_containers[done_container] = false
 		}
 	}
