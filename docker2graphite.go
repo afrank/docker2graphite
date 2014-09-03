@@ -11,6 +11,7 @@ import (
 	"github.com/drags/graphite-golang"
 	"time"
 	"flag"
+	"gopkg.in/fsnotify.v1"
 )
 
 var use_short_id bool
@@ -90,34 +91,58 @@ func watch_sysfs_dir(sysfs_path string, graphite_client *graphite.Graphite) {
 	container_done := make(chan string)
 	watched_containers := make(map[string]bool)
 
-	for ;; {
-		log.Print("Starting container check")
-		containers, err := find_containers(sysfs_path)
-		if err != nil {
-			log.Fatal("Got err from find_containers:", err)
+	// closure to handle accounting at goroutine start
+	start_container_dir := func(path string) {
+		if path != "" && watched_containers[path] == false {
+			log.Print("Adding new container with path: ", path)
+			watched_containers[path] = true
+			go track_container_dir(graphite_client, path, container_done)
 		}
+	}
 
-		// Check for and run any new containers
-		for _, path := range containers {
-			if path != "" && watched_containers[path] == false {
-				log.Print("Adding new container with path: ", path)
-				watched_containers[path] = true
-				go track_container_dir(graphite_client, path, container_done)
-			}
-		}
+	// Find and start existing containers
+	containers, err := find_containers(sysfs_path)
+	if err != nil {
+		log.Fatal("Got err from find_containers:", err)
+	}
+	for _, path := range containers {
+		start_container_dir(path)
+	}
 
+	// Watch directory for new containers
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer watcher.Close()
+	// watch sysfs path
+	err = watcher.Add(sysfs_path)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for {
 		select {
-		case done_container := <-container_done:
-			if ! watched_containers[done_container] {
-				log.Fatal("Got done notification for untracked container: ", done_container)
+		// Handle fsnotify create events.
+		case event := <-watcher.Events:
+			//log.Println("event:", event)
+			if event.Op&fsnotify.Create == fsnotify.Create {
+				//log.Println("Saw created file:", event.Name)
+				// If file named in create event is directory, start tracking
+				fi, err := os.Stat(event.Name)
+				if err != nil {
+					fmt.Println(err)
+					break
+				}
+				if m := fi.Mode(); m.IsDir() {
+					start_container_dir(event.Name)
+				}
 			}
+		// Handle done signals from track_container_dir
+		case done_container := <-container_done:
 			log.Print("Removing finished container with path: ", done_container)
 			watched_containers[done_container] = false
-		default:
-			break
 		}
-
-		time.Sleep(time.Duration(interval_sysfs_watch) * time.Second)
 	}
 }
 
