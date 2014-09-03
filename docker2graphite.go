@@ -22,7 +22,7 @@ var interval_sysfs_watch = 60
 func connect_to_graphite(host string, port int) *graphite.Graphite {
 	graphite_client, err := graphite.NewGraphite(host, port)
 	if err != nil {
-		log.Fatal("Failed to connect to graphite", err)
+		log.Fatal("Failed to connect to graphite: ", err)
 	}
 	return graphite_client
 }
@@ -104,7 +104,7 @@ func watch_sysfs_dir(sysfs_path string, graphite_client *graphite.Graphite) {
 	// Find and start existing containers
 	containers, err := find_containers(sysfs_path)
 	if err != nil {
-		log.Fatal("Got err from find_containers:", err)
+		log.Fatal("Got err from find_containers: ", err)
 	}
 	for _, path := range containers {
 		start_container_dir(path)
@@ -113,22 +113,22 @@ func watch_sysfs_dir(sysfs_path string, graphite_client *graphite.Graphite) {
 	// Watch directory for new containers
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Got error from creating fsnotify watcher: ", err)
 	}
 	defer watcher.Close()
 	// watch sysfs path
 	err = watcher.Add(sysfs_path)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Got error from adding sysfs_path to watcher: ", err)
 	}
 
 	for {
 		select {
 		// Handle fsnotify create events.
 		case event := <-watcher.Events:
-			//log.Println("event:", event)
+			//log.Println("event: ", event)
 			if event.Op&fsnotify.Create == fsnotify.Create {
-				//log.Println("Saw created file:", event.Name)
+				//log.Println("Saw created file: ", event.Name)
 				// If file named in create event is directory, start tracking
 				fi, err := os.Stat(event.Name)
 				if err != nil {
