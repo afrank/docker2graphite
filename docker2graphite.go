@@ -13,8 +13,9 @@ import (
 	"flag"
 )
 
-//var use_container_names, use_short_id bool
 var use_short_id bool
+var graphite_interval int
+var interval_sysfs_watch = 60
 
 func connect_to_graphite(host string, port int) (*graphite.Graphite) {
 	graphite_client, err := graphite.NewGraphite(host, port)
@@ -44,9 +45,8 @@ func find_containers(sysfs_path string) ([]string, error) {
 	return container_dirs, nil
 }
 
-func track_container_dir(graphite_client *graphite.Graphite, dir string, done chan bool) {
+func track_container_dir(graphite_client *graphite.Graphite, dir string, container_done chan string) {
 	var container_name string
-	var metrics []graphite.Metric
 
 	if use_short_id {
 		container_name = filepath.Base(dir)[0:12]
@@ -54,34 +54,74 @@ func track_container_dir(graphite_client *graphite.Graphite, dir string, done ch
 		container_name = filepath.Base(dir)
 	}
 
-	now := time.Now().Unix()
+	for ;; {
+		var metrics []graphite.Metric
+		now := time.Now().Unix()
 
-	stat_file := path.Join(dir, "memory.stat")
-	lines, err := ioutil.ReadFile(stat_file)
-	if err != nil {
-		log.Print("Got error when stat'ing memory.stat: ", err)
-		// Assume container has disappeared, end goroutine
-		done <- 1
-	}
-
-	stat_lines := strings.Split(string(lines), "\n")
-	for _, st_line := range stat_lines {
-		if st_line == "" {
-			continue
+		stat_file := path.Join(dir, "memory.stat")
+		lines, err := ioutil.ReadFile(stat_file)
+		if err != nil {
+			log.Print("Got error when stat'ing memory.stat: ", err)
+			// Assume container has disappeared, end goroutine
+			container_done <- dir
+			return
 		}
-		kv := strings.Split(st_line, " ")
 
-		metric_name := fmt.Sprintf("%s.%s", container_name, kv[0])
-		metric_value := kv[1]
+		stat_lines := strings.Split(string(lines), "\n")
+		for _, st_line := range stat_lines {
+			if st_line == "" {
+				continue
+			}
+			kv := strings.Split(st_line, " ")
 
-		metrics = append(metrics, graphite.NewMetric(metric_name, metric_value, now))
+			metric_name := fmt.Sprintf("%s.%s", container_name, kv[0])
+			metric_value := kv[1]
+
+			metrics = append(metrics, graphite.NewMetric(metric_name, metric_value, now))
+		}
+		graphite_client.SendMetrics(metrics)
+		time.Sleep(time.Duration(graphite_interval) * time.Second)
+		metrics = nil
 	}
-	graphite_client.SendMetrics(metrics)
-	done <- 1
+	container_done <- dir
+}
+
+func watch_sysfs_dir(sysfs_path string, graphite_client *graphite.Graphite) {
+	container_done := make(chan string)
+	watched_containers := make(map[string]bool)
+
+	for ;; {
+		log.Print("Starting container check")
+		containers, err := find_containers(sysfs_path)
+		if err != nil {
+			log.Fatal("Got err from find_containers:", err)
+		}
+
+		// Check for and run any new containers
+		for _, path := range containers {
+			if path != "" && watched_containers[path] == false {
+				log.Print("Adding new container with path: ", path)
+				watched_containers[path] = true
+				go track_container_dir(graphite_client, path, container_done)
+			}
+		}
+
+		select {
+		case done_container := <-container_done:
+			if ! watched_containers[done_container] {
+				log.Fatal("Got done notification for untracked container: ", done_container)
+			}
+			log.Print("Removing finished container with path: ", done_container)
+			watched_containers[done_container] = false
+		default:
+			break
+		}
+
+		time.Sleep(time.Duration(interval_sysfs_watch) * time.Second)
+	}
 }
 
 func main() {
-	watch_done := make(chan bool)
 	graphite_host := flag.String("H", "", "Graphite carbon-cache host, REQUIRED")
 	graphite_port := flag.Int("P", 2003, "Graphite carbon-cache plaintext port")
 	graphite_prefix := flag.String("p", "", "Graphite metric prefix: [prefix].<container>.<metric>")
@@ -96,17 +136,5 @@ func main() {
 	graphite_client := connect_to_graphite(*graphite_host, *graphite_port)
 	graphite_client.Prefix = *graphite_prefix
 
-	devices, err := find_containers(*cgroup_path)
-	if err != nil {
-		log.Fatal("Got err from find_containers:", err)
-	}
-	done <- true
-}
-
-	for _, path := range devices {
-		if path != "" {
-			go track_container_dir(graphite_client, path, done)
-			<-done
-		}
-	}
+	watch_sysfs_dir(*sysfs_path, graphite_client)
 }
