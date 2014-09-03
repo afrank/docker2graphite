@@ -24,8 +24,8 @@ func connect_to_graphite(host string, port int) (*graphite.Graphite) {
 	return graphite_client
 }
 
-func find_containers(cgroup_path string) ([]string, error) {
-	search_path := strings.TrimRight(cgroup_path, "*/")
+func find_containers(sysfs_path string) ([]string, error) {
+	search_path := strings.TrimRight(sysfs_path, "*/")
 	search_path = fmt.Sprintf("%s/*", search_path)
 	possible_containers, _ := filepath.Glob(search_path)
 
@@ -44,7 +44,7 @@ func find_containers(cgroup_path string) ([]string, error) {
 	return container_dirs, nil
 }
 
-func track_container_dir(graphite_client *graphite.Graphite, dir string, done chan int) {
+func track_container_dir(graphite_client *graphite.Graphite, dir string, done chan bool) {
 	var container_name string
 	var metrics []graphite.Metric
 
@@ -81,13 +81,12 @@ func track_container_dir(graphite_client *graphite.Graphite, dir string, done ch
 }
 
 func main() {
-	done := make(chan int)
+	watch_done := make(chan bool)
 	graphite_host := flag.String("H", "", "Graphite carbon-cache host, REQUIRED")
 	graphite_port := flag.Int("P", 2003, "Graphite carbon-cache plaintext port")
-	//graphite_interval := flag.Int("i", 10, "Graphite push interval. A multiple (generally 1) of whisper file resolution")
 	graphite_prefix := flag.String("p", "", "Graphite metric prefix: [prefix].<container>.<metric>")
-	cgroup_path := flag.String("c", "/sys/fs/cgroup/memory/docker/", "Path to docker in sysfs/cgroup/")
-	//flag.BoolVal(&use_container_names, "n", false, "Use container name instead of container ID for metric path")
+	flag.IntVar(&graphite_interval, "i", 10, "Graphite push interval. A multiple (generally 1) of whisper file resolution")
+	sysfs_path := flag.String("c", "/sys/fs/cgroup/memory/docker/", "Path to docker in sysfs/cgroup/memory")
 	flag.BoolVar(&use_short_id, "s", true, "Use 12 character format of container ID for metric path")
 	flag.Parse()
 
@@ -101,6 +100,8 @@ func main() {
 	if err != nil {
 		log.Fatal("Got err from find_containers:", err)
 	}
+	done <- true
+}
 
 	for _, path := range devices {
 		if path != "" {
