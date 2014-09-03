@@ -23,31 +23,24 @@ func connect_to_graphite(host string, port int) (*graphite.Graphite) {
 	return graphite_client
 }
 
-func find_docker_devices(cgroup_path string) ([]string, error) {
+func find_containers(cgroup_path string) ([]string, error) {
 	search_path := strings.TrimRight(cgroup_path, "*/")
 	search_path = fmt.Sprintf("%s/*", search_path)
-	devices, _ := filepath.Glob(search_path)
-	ret := make([]string, 8)
-	found_dirs := 0
-	for _, path := range devices {
+	possible_containers, _ := filepath.Glob(search_path)
+
+	var container_dirs []string
+	for _, path := range possible_containers {
 		fi, err := os.Stat(path)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
 
-		if found_dirs == cap(ret) {
-			new_ret := make([]string, cap(ret)*2, cap(ret)*2)
-			copy(new_ret, ret)
-			ret = new_ret[:] // baby's first fugly slice expansion
-		}
-
 		if m := fi.Mode(); m.IsDir() {
-			ret[found_dirs] = path
-			found_dirs += 1
+			container_dirs = append(container_dirs, path)
 		}
 	}
-	return ret, nil
+	return container_dirs, nil
 }
 
 func track_container_dir(graphite_client *graphite.Graphite, dir string, done chan int) {
@@ -60,7 +53,7 @@ func track_container_dir(graphite_client *graphite.Graphite, dir string, done ch
 	if err != nil {
 		log.Fatal(err)
 	}
-	ret_metrics := make([]graphite.Metric, len(lines))
+	metrics := make([]graphite.Metric, len(lines))
 	//fmt.Println(string(lines))
 	stat_lines := strings.Split(string(lines), "\n")
 	for i, st_line := range stat_lines {
@@ -75,9 +68,9 @@ func track_container_dir(graphite_client *graphite.Graphite, dir string, done ch
 			log.Print(err)
 			continue
 		}
-		ret_metrics[i] = graphite.NewMetric(metric_name, metric_value, now)
+		metrics[i] = graphite.NewMetric(metric_name, metric_value, now)
 	}
-	graphite_client.SendMetrics(ret_metrics)
+	graphite_client.SendMetrics(metrics)
 	done <- 1
 }
 
@@ -87,14 +80,17 @@ func main() {
 	graphite_port := flag.Int("P", 2003, "Graphite carbon-cache plaintext port")
 	cgroup_path := flag.String("c", "/sys/fs/cgroup/memory/docker/", "Path to docker in sysfs/cgroup/")
 	flag.Parse()
+
 	if *graphite_host == "" {
 		log.Fatal("Must provide a graphite carbon-cache host with -H")
 	}
 	graphite_client := connect_to_graphite(*graphite_host, *graphite_port)
-	devices, err := find_docker_devices(*cgroup_path)
+
+	devices, err := find_containers(*cgroup_path)
 	if err != nil {
 		log.Fatal("Got err from find_docker_devices:", err)
 	}
+
 	for _, path := range devices {
 		if path != "" {
 			go track_container_dir(graphite_client, path, done)
