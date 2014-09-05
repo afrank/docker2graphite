@@ -1,16 +1,17 @@
 package main
 
 import (
-	"path/filepath"
+	"flag"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"os"
 	"path"
-	"log"
-	"io/ioutil"
+	"path/filepath"
 	"strings"
-	"github.com/drags/graphite-golang"
 	"time"
-	"flag"
+
+	"github.com/drags/graphite-golang"
 	"gopkg.in/fsnotify.v1"
 )
 
@@ -18,7 +19,7 @@ var use_short_id bool
 var graphite_interval int
 var interval_sysfs_watch = 60
 
-func connect_to_graphite(host string, port int) (*graphite.Graphite) {
+func connect_to_graphite(host string, port int) *graphite.Graphite {
 	graphite_client, err := graphite.NewGraphite(host, port)
 	if err != nil {
 		log.Fatal("Failed to connect to graphite", err)
@@ -55,7 +56,7 @@ func track_container_dir(graphite_client *graphite.Graphite, dir string, contain
 		container_name = filepath.Base(dir)
 	}
 
-	for ;; {
+	for {
 		var metrics []graphite.Metric
 		now := time.Now().Unix()
 
