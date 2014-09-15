@@ -6,13 +6,13 @@ A quick utility to pump docker container metrics into graphite. This 0.1 version
 
 ## Usage
 
-Usage of /tmp/go-build238229118/command-line-arguments/_obj/exe/docker2graphite:
-  -H="": Graphite carbon-cache host, REQUIRED
-  -P=2003: Graphite carbon-cache plaintext port
-  -c="/sys/fs/cgroup/memory/docker/": Path to docker in sysfs/cgroup/memory
-  -i=10: Graphite push interval. A multiple (generally 1x) of whisper file resolution
-  -p="": Graphite metric prefix: [prefix].<container>.<metric>
-  -s=true: Use 12 character format of container ID for metric path
+	Usage of docker2graphite:
+	  -H="": Graphite carbon-cache host, REQUIRED
+	  -P=2003: Graphite carbon-cache plaintext port
+	  -c="/sys/fs/cgroup/memory/docker/": Path to docker in sysfs/cgroup/memory
+	  -i=10: Graphite push interval. A multiple (generally 1x) of whisper file resolution
+	  -p="": Graphite metric prefix: [prefix].<container>.<metric>
+	  -s=true: Use 12 character format of container ID for metric path
 
 #### Options
 
