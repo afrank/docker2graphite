@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,8 +78,27 @@ func getMetricsFromTable(stat_file string, metric_prefix string) (metrics []grap
 
 		metric_name := fmt.Sprintf("%s.%s", metric_prefix, kv[0])
 		metric_value := kv[1]
-
 		metrics = append(metrics, graphite.NewMetric(metric_name, metric_value, now))
+	}
+	return metrics, nil
+}
+
+func getMetricsArray(statFilePath string, metricPrefix string) (metrics []graphite.Metric, err error) {
+	now := time.Now().Unix()
+
+	lines, err := ioutil.ReadFile(statFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build prefix up to end of filename
+	metricPrefix = fmt.Sprintf("%s.%s", metricPrefix, strings.Replace(path.Base(statFilePath), ".", "_", -1))
+
+	statVals := strings.Split(strings.TrimSpace(string(lines)), " ")
+	for index, value := range statVals {
+		metricName := fmt.Sprintf("%s.%s", metricPrefix, strconv.Itoa(index))
+		metricValue := value
+		metrics = append(metrics, graphite.NewMetric(metricName, metricValue, now))
 	}
 	return metrics, nil
 }
@@ -128,7 +148,7 @@ func track_container_cpuacct(dir string, container_done chan string) {
 	metricsToPoll := make(map[string]func(statFile, metricPrefix string) ([]graphite.Metric, error))
 	metricsToPoll["cpuacct.stat"] = getMetricsFromTable
 	metricsToPoll["cpuacct.usage"] = getMetricsSingleItem
-	//metricsToPoll["cpuacct.usage_percpu"] = getMetricsSingleLineArray
+	metricsToPoll["cpuacct.usage_percpu"] = getMetricsArray
 
 	for {
 		for statFile, metricFunc := range metricsToPoll {
@@ -139,30 +159,13 @@ func track_container_cpuacct(dir string, container_done chan string) {
 			}
 			metrics = append(metrics, polledMetrics...)
 		}
-
-		//cpuacct_usage_metrics, err = getMetricsFromSingle(usage_file, metric_prefix)
-		//if err != nil {
-		//	log.Println("Got error when polling cpuacct.stat: ", err)
-		//	// Assume container has disappeared, end goroutine
-		//	container_done <- dir
-		//}
-		//metrics = append(metrics, cpuacct_stat_metrics)
-		//
-		//cpuacct_usagepercpu_metrics, err = getMetricsSingleArray(usagepercpu_file, metric_prefix)
-		//if err != nil {
-		//	log.Println("Got error when polling cpuacct.stat: ", err)
-		//	// Assume container has disappeared, end goroutine
-		//	container_done <- dir
-		//}
-		//metrics = append(metrics, cpuacct_stat_metrics)
-
 		graphite_client.SendMetrics(metrics)
 		time.Sleep(time.Duration(graphite_interval) * time.Second)
 		metrics = nil
 	}
 	container_done <- dir
 }
-func watch_sysfs_dir(sysfs_path string, track_func ContainerTracker, wd chan bool) {
+func watch_sysfs_dir(sysfs_path string, trackFunc ContainerTracker, wd chan bool) {
 	container_done := make(chan string)
 	watched_containers := make(map[string]bool)
 
@@ -171,7 +174,7 @@ func watch_sysfs_dir(sysfs_path string, track_func ContainerTracker, wd chan boo
 		if path != "" && watched_containers[path] == false {
 			log.Println("Adding new container with path: ", path)
 			watched_containers[path] = true
-			go track_func(path, container_done)
+			go trackFunc(path, container_done)
 		}
 	}
 
