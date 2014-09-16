@@ -17,14 +17,16 @@ import (
 
 var use_short_id bool
 var graphite_interval int
-var interval_sysfs_watch = 60
+var graphite_client *graphite.Graphite
 
-func connect_to_graphite(host string, port int) *graphite.Graphite {
-	graphite_client, err := graphite.NewGraphite(host, port)
+type ContainerTracker func(path string, container_done chan string)
+
+func connect_to_graphite(host string, port int) {
+	var err error
+	graphite_client, err = graphite.NewGraphite(host, port)
 	if err != nil {
 		log.Fatal("Failed to connect to graphite: ", err)
 	}
-	return graphite_client
 }
 
 func find_containers(sysfs_path string) ([]string, error) {
@@ -47,48 +49,115 @@ func find_containers(sysfs_path string) ([]string, error) {
 	return container_dirs, nil
 }
 
-func track_container_dir(graphite_client *graphite.Graphite, dir string, container_done chan string) {
-	var container_name string
+func get_container_name(dir string) (name string) {
 
 	if use_short_id {
-		container_name = filepath.Base(dir)[0:12]
+		name = filepath.Base(dir)[0:12]
 	} else {
-		container_name = filepath.Base(dir)
+		name = filepath.Base(dir)
 	}
 
-	for {
-		var metrics []graphite.Metric
-		now := time.Now().Unix()
+	return name
+}
 
-		stat_file := path.Join(dir, "memory.stat")
-		lines, err := ioutil.ReadFile(stat_file)
+func getMetricsFromTable(stat_file string, metric_prefix string) (metrics []graphite.Metric, err error) {
+	now := time.Now().Unix()
+
+	lines, err := ioutil.ReadFile(stat_file)
+	if err != nil {
+		return nil, err
+	}
+
+	stat_lines := strings.Split(string(lines), "\n")
+	for _, st_line := range stat_lines {
+		if st_line == "" {
+			continue
+		}
+		kv := strings.Split(st_line, " ")
+
+		metric_name := fmt.Sprintf("%s.%s", metric_prefix, kv[0])
+		metric_value := kv[1]
+
+		metrics = append(metrics, graphite.NewMetric(metric_name, metric_value, now))
+	}
+	return metrics, nil
+}
+func track_container_memory(dir string, container_done chan string) {
+	container_name := get_container_name(filepath.Base(dir))
+	stat_file := path.Join(dir, "memory.stat")
+	metric_prefix := container_name + ".memory"
+	var metrics []graphite.Metric
+	var err error
+
+	for {
+		metrics, err = getMetricsFromTable(stat_file, metric_prefix)
 		if err != nil {
-			log.Println("Got error when stat'ing memory.stat: ", err)
+			log.Println("Got error when polling memory.stat: ", err)
 			// Assume container has disappeared, end goroutine
 			container_done <- dir
-			return
 		}
 
-		stat_lines := strings.Split(string(lines), "\n")
-		for _, st_line := range stat_lines {
-			if st_line == "" {
-				continue
+		graphite_client.SendMetrics(metrics)
+		time.Sleep(time.Duration(graphite_interval) * time.Second)
+	}
+	container_done <- dir
+}
+
+func track_container_cpuacct(dir string, container_done chan string) {
+	container_name := get_container_name(filepath.Base(dir))
+	//stat_file := path.Join(dir, "cpuacct.stat")
+	metric_prefix := container_name + ".cpuacct"
+	var metrics []graphite.Metric
+	//var cpuacct_stat_metrics []graphite.Metric
+	//var cpuacct_usage_metrics []graphite.Metric
+	//var cpuacct_usagepercpu_metrics []graphite.Metric
+	//var err error
+
+	metricsToPoll := make(map[string]func(stat_file, metric_prefix string) ([]graphite.Metric, error))
+	metricsToPoll["cpuacct.stat"] = getMetricsFromTable
+	//metricsToPoll["cpuacct.usage"] = getMetricsSingleLine
+	//metricsToPoll["cpuacct.usage_percpu"] = getMetricsSingleLineArray
+
+	for {
+		for statFile, metricFunc := range metricsToPoll {
+			statFilePath := path.Join(dir, statFile)
+			polledMetrics, err := metricFunc(statFilePath, metric_prefix)
+			if err != nil {
+				log.Println("Got error fetching stats from file: ", statFile, " : ", err)
 			}
-			kv := strings.Split(st_line, " ")
-
-			metric_name := fmt.Sprintf("%s.%s", container_name, kv[0])
-			metric_value := kv[1]
-
-			metrics = append(metrics, graphite.NewMetric(metric_name, metric_value, now))
+			metrics = append(metrics, polledMetrics...)
 		}
+		//cpuacct_stat_metrics, err = getMetricsFromTable(stat_file, metric_prefix)
+		//if err != nil {
+		//	log.Println("Got error when polling cpuacct.stat: ", err)
+		//	// Assume container has disappeared, end goroutine
+		//	container_done <- dir
+		//}
+		//metrics = append(metrics, cpuacct_stat_metrics...)
+
+		//cpuacct_usage_metrics, err = getMetricsFromSingle(usage_file, metric_prefix)
+		//if err != nil {
+		//	log.Println("Got error when polling cpuacct.stat: ", err)
+		//	// Assume container has disappeared, end goroutine
+		//	container_done <- dir
+		//}
+		//metrics = append(metrics, cpuacct_stat_metrics)
+		//
+		//cpuacct_usagepercpu_metrics, err = getMetricsSingleArray(usagepercpu_file, metric_prefix)
+		//if err != nil {
+		//	log.Println("Got error when polling cpuacct.stat: ", err)
+		//	// Assume container has disappeared, end goroutine
+		//	container_done <- dir
+		//}
+		//metrics = append(metrics, cpuacct_stat_metrics)
+
 		graphite_client.SendMetrics(metrics)
 		time.Sleep(time.Duration(graphite_interval) * time.Second)
 		metrics = nil
 	}
 	container_done <- dir
 }
-
-func watch_sysfs_dir(sysfs_path string, graphite_client *graphite.Graphite) {
+func watch_sysfs_dir(sysfs_path string, track_func ContainerTracker, wd chan bool) {
 	container_done := make(chan string)
 	watched_containers := make(map[string]bool)
 
@@ -97,11 +166,12 @@ func watch_sysfs_dir(sysfs_path string, graphite_client *graphite.Graphite) {
 		if path != "" && watched_containers[path] == false {
 			log.Println("Adding new container with path: ", path)
 			watched_containers[path] = true
-			go track_container_dir(graphite_client, path, container_done)
+			go track_func(path, container_done)
 		}
 	}
 
 	// Find and start existing containers
+	// TODO ensure path exists
 	containers, err := find_containers(sysfs_path)
 	if err != nil {
 		log.Fatal("Got err from find_containers: ", err)
@@ -119,7 +189,7 @@ func watch_sysfs_dir(sysfs_path string, graphite_client *graphite.Graphite) {
 	// watch sysfs path
 	err = watcher.Add(sysfs_path)
 	if err != nil {
-		log.Fatal("Got error from adding sysfs_path to watcher: ", err)
+		log.Fatal("Got error from adding path ", sysfs_path, " to watcher: ", err)
 	}
 
 	for {
@@ -145,6 +215,7 @@ func watch_sysfs_dir(sysfs_path string, graphite_client *graphite.Graphite) {
 			watched_containers[done_container] = false
 		}
 	}
+	wd <- true
 }
 
 func main() {
@@ -152,15 +223,23 @@ func main() {
 	graphite_port := flag.Int("P", 2003, "Graphite carbon-cache plaintext port")
 	graphite_prefix := flag.String("p", "", "Graphite metric prefix: [prefix].<container>.<metric>")
 	flag.IntVar(&graphite_interval, "i", 10, "Graphite push interval. A multiple (generally 1) of whisper file resolution")
-	sysfs_path := flag.String("c", "/sys/fs/cgroup/memory/docker/", "Path to docker in sysfs/cgroup/memory")
+	sysfs_path := flag.String("c", "/sys/fs/cgroup/", "Path cgroup in sysfs")
 	flag.BoolVar(&use_short_id, "s", true, "Use 12 character format of container ID for metric path")
 	flag.Parse()
 
 	if *graphite_host == "" {
 		log.Fatal("Must provide a graphite carbon-cache host with -H")
 	}
-	graphite_client := connect_to_graphite(*graphite_host, *graphite_port)
+	connect_to_graphite(*graphite_host, *graphite_port)
 	graphite_client.Prefix = *graphite_prefix
 
-	watch_sysfs_dir(*sysfs_path, graphite_client)
+	memory_path := *sysfs_path + "memory/docker"
+	cpuacct_path := *sysfs_path + "cpuacct/docker"
+	//bklio_path := *sysfs_path + "blkio/docker"
+
+	watcher_done := make(chan bool)
+	go watch_sysfs_dir(memory_path, track_container_memory, watcher_done)
+	go watch_sysfs_dir(cpuacct_path, track_container_cpuacct, watcher_done)
+	<-watcher_done
+	<-watcher_done
 }
