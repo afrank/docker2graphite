@@ -82,6 +82,23 @@ func getMetricsFromTable(stat_file string, metric_prefix string) (metrics []grap
 	}
 	return metrics, nil
 }
+
+func getMetricsSingleItem(statFilePath string, metric_prefix string) (metrics []graphite.Metric, err error) {
+	now := time.Now().Unix()
+
+	lines, err := ioutil.ReadFile(statFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	metric_name := fmt.Sprintf("%s.%s", metric_prefix, strings.Replace(path.Base(statFilePath), ".", "_", -1))
+	metric_value := strings.TrimSpace(string(lines))
+	//fmt.Println("Got single item value: ", metric_value, ". In file: ", statFilePath)
+
+	metrics = append(metrics, graphite.NewMetric(metric_name, metric_value, now))
+	return metrics, nil
+}
+
 func track_container_memory(dir string, container_done chan string) {
 	container_name := get_container_name(filepath.Base(dir))
 	stat_file := path.Join(dir, "memory.stat")
@@ -105,17 +122,12 @@ func track_container_memory(dir string, container_done chan string) {
 
 func track_container_cpuacct(dir string, container_done chan string) {
 	container_name := get_container_name(filepath.Base(dir))
-	//stat_file := path.Join(dir, "cpuacct.stat")
 	metric_prefix := container_name + ".cpuacct"
 	var metrics []graphite.Metric
-	//var cpuacct_stat_metrics []graphite.Metric
-	//var cpuacct_usage_metrics []graphite.Metric
-	//var cpuacct_usagepercpu_metrics []graphite.Metric
-	//var err error
 
-	metricsToPoll := make(map[string]func(stat_file, metric_prefix string) ([]graphite.Metric, error))
+	metricsToPoll := make(map[string]func(statFile, metricPrefix string) ([]graphite.Metric, error))
 	metricsToPoll["cpuacct.stat"] = getMetricsFromTable
-	//metricsToPoll["cpuacct.usage"] = getMetricsSingleLine
+	metricsToPoll["cpuacct.usage"] = getMetricsSingleItem
 	//metricsToPoll["cpuacct.usage_percpu"] = getMetricsSingleLineArray
 
 	for {
@@ -127,13 +139,6 @@ func track_container_cpuacct(dir string, container_done chan string) {
 			}
 			metrics = append(metrics, polledMetrics...)
 		}
-		//cpuacct_stat_metrics, err = getMetricsFromTable(stat_file, metric_prefix)
-		//if err != nil {
-		//	log.Println("Got error when polling cpuacct.stat: ", err)
-		//	// Assume container has disappeared, end goroutine
-		//	container_done <- dir
-		//}
-		//metrics = append(metrics, cpuacct_stat_metrics...)
 
 		//cpuacct_usage_metrics, err = getMetricsFromSingle(usage_file, metric_prefix)
 		//if err != nil {
